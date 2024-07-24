@@ -1,0 +1,74 @@
+name: Build, push and deploy example
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+jobs:
+  build-and-publish-docker-image:
+    name: Build and publish Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to Oracle Cloud Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.OCIR_REGISTRY }}
+          username: ${{ secrets.OCIR_USERNAME }}
+          password: ${{ secrets.OCIR_AUTH_TOKEN }}
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          platforms: linux/arm64
+          context: .
+          file: Dockerfile
+          tags: ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:latest
+          push: false
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Push Docker Image to Oracle Cloud Registry
+        run: |
+          docker push ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:latest
+
+  deploy-to-oke:
+    needs: build-and-publish-docker-image
+    name: Deploy container image to an OKE Cluster
+    runs-on: ubuntu-latest
+    env:
+      OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      OCI_NETWORK_SG_BACKEND: ${{ secrets.OCI_NETWORK_SG_BACKEND }}
+      IMAGE_NAME: ${{ secrets.OCIR_REGISTRY }}/${{ secrets.OCI_TENANCY_NAMESPACE }}/${{ secrets.OCIR_REPO_NAME }}:latest
+      DOCKER_REGISTRY_SECRET_NAME: 'oke-example-workflow-docker-secret'
+      NAMESPACE: 'oke-example-workflow-namespace'
+    steps:
+      - name: Configure Kubectl
+        uses: oracle-actions/configure-kubectl-oke@v1.5.0
+        with:
+          cluster: ${{ secrets.OKE_CLUSTER_OCID }}
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Create namespace if not exists
+        run: |
+          kubectl create namespace ${{ env.NAMESPACE }} || echo "namespace already exists"
+      - name: Create Docker registry secret
+        run: |
+          kubectl -n preview create secret docker-registry ${{ env.DOCKER_REGISTRY_SECRET_NAME }} \
+          --docker-server=${{ secrets.OCIR_REGISTRY}} \
+          --docker-username=${{ secrets.OCIR_USERNAME}} \
+          --docker-password='${{ secrets.OCIR_AUTH_TOKEN }}' \
+          --docker-email=${{ secrets.OCIR_USERNAME_EMAIL}} || echo "secret already exists"
+      - name: Deploy to Kubernetes Cluster
+        run: |
+          envsubst < kubernetes/main.yml | kubectl apply -f - -n ${{ env.NAMESPACE }}
