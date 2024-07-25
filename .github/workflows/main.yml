@@ -64,7 +64,7 @@ jobs:
           kubectl create namespace ${{ env.NAMESPACE }} || echo "namespace already exists"
       - name: Create Docker registry secret
         run: |
-          kubectl -n preview create secret docker-registry ${{ env.DOCKER_REGISTRY_SECRET_NAME }} \
+          kubectl -n ${{ env.NAMESPACE }} create secret docker-registry ${{ env.DOCKER_REGISTRY_SECRET_NAME }} \
           --docker-server=${{ secrets.OCIR_REGISTRY}} \
           --docker-username=${{ secrets.OCIR_USERNAME}} \
           --docker-password='${{ secrets.OCIR_AUTH_TOKEN }}' \
